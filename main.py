@@ -28,6 +28,38 @@ def send_telegram(message):
         print("Telegram error:", e)
 
 
+def safe_float(value, default=0):
+    try:
+        if value is None:
+            return default
+        return float(value)
+    except:
+        return default
+
+
+def classify_pair(pair):
+    liquidity = safe_float(pair.get("liquidity"))
+    volume = safe_float(pair.get("volume_24h"))
+    change = safe_float(pair.get("change_24h"))
+
+    if liquidity == 0:
+        return "🟡 مبكر جداً / Pump.fun بدون سيولة"
+
+    if liquidity < 5000:
+        return "🔴 سيولة ضعيفة جداً"
+
+    if change < -50:
+        return "🔴 انهيار قوي"
+
+    if change > 300:
+        return "🔴 ارتفع كثيراً - احتمال دخول متأخر"
+
+    if volume > 50000 and liquidity > 10000 and 10 <= change <= 200:
+        return "🟢 قابل للمتابعة"
+
+    return "⚪ مراقبة فقط"
+
+
 @app.route("/")
 def home():
     return "Solana Brain is running"
@@ -49,6 +81,7 @@ def scan():
                 f"💰 السيولة: {pair.get('liquidity', 0)}\n"
                 f"📊 حجم 24h: {pair.get('volume_24h', 0)}\n"
                 f"📈 تغير 24h: {pair.get('change_24h', 'N/A')}%\n"
+                f"🧪 التصنيف: {classify_pair(pair)}\n"
                 f"🏦 DEX: {pair.get('dex', 'unknown')}\n"
                 f"🔗 {pair.get('pair_url', '')}\n\n"
             )
