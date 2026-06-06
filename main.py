@@ -521,7 +521,77 @@ def early():
 
     html += '<p><a href="/">Back Home</a></p>'
     return html
+@app.route("/moonshots")
+def moonshots():
+    conn = get_connection()
+    cur = conn.cursor()
 
+    cur.execute("""
+        SELECT
+            token_address,
+            symbol,
+            name,
+            COUNT(*) AS appearances,
+            ROUND(AVG(volume_24h)::numeric, 2) AS avg_volume,
+            ROUND(AVG(liquidity)::numeric, 2) AS avg_liquidity,
+            ROUND(AVG(change_24h)::numeric, 2) AS avg_change,
+            MAX(pair_url) AS pair_url
+        FROM market_snapshots
+        GROUP BY token_address, symbol, name
+        HAVING COUNT(*) >= 2
+        ORDER BY AVG(volume_24h) DESC
+        LIMIT 30
+    """)
+
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    html = "<h1>🚀 Moonshots</h1>"
+    html += "<p>أفضل المرشحين حسب النشاط والتكرار.</p>"
+
+    for r in rows:
+        score = 0
+
+        appearances = safe_float(r["appearances"])
+        volume = safe_float(r["avg_volume"])
+        liquidity = safe_float(r["avg_liquidity"])
+        change = safe_float(r["avg_change"])
+
+        if appearances >= 5:
+            score += 30
+        elif appearances >= 3:
+            score += 20
+        else:
+            score += 10
+
+        if volume >= 100000:
+            score += 30
+        elif volume >= 50000:
+            score += 20
+
+        if liquidity >= 10000:
+            score += 20
+
+        if 20 <= change <= 200:
+            score += 20
+
+        score = min(score, 100)
+
+        html += f"""
+        <hr>
+        <h2>{r['symbol']} - {r['name']}</h2>
+        <p><b>Moonshot Score:</b> {score}/100</p>
+        <p><b>Appearances:</b> {r['appearances']}</p>
+        <p><b>Avg Volume:</b> {r['avg_volume']}</p>
+        <p><b>Avg Liquidity:</b> {r['avg_liquidity']}</p>
+        <p><b>Avg Change:</b> {r['avg_change']}%</p>
+        <p><a href="{r['pair_url']}" target="_blank">Open DexScreener</a></p>
+        """
+
+    html += '<p><a href="/">Back Home</a></p>'
+    return html
+    
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
