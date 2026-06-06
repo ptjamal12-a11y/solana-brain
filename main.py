@@ -409,9 +409,8 @@ def signals():
             pair_url,
             created_at
         FROM market_snapshots
-        WHERE liquidity >= 10000
-          AND volume_24h >= 50000
-          AND change_24h BETWEEN 10 AND 200
+        WHERE volume_24h >= 30000
+          AND change_24h > 20
         ORDER BY created_at DESC
         LIMIT 30
     """)
@@ -421,12 +420,53 @@ def signals():
     conn.close()
 
     html = "<h1>🚨 Signals</h1>"
-    html += "<p>آخر الفرص القوية حسب شروط السيولة والحجم والزخم.</p>"
+    html += "<p>آخر الفرص حسب الحجم والزخم، حتى لو كانت بدون سيولة حقيقية.</p>"
 
     for r in rows:
+        liquidity = safe_float(r["liquidity"])
+        volume = safe_float(r["volume_24h"])
+        change = safe_float(r["change_24h"])
+
+        score = 0
+
+        if volume >= 200000:
+            score += 40
+        elif volume >= 100000:
+            score += 30
+        elif volume >= 50000:
+            score += 20
+        else:
+            score += 10
+
+        if 20 <= change <= 120:
+            score += 30
+        elif 120 < change <= 250:
+            score += 20
+        elif change > 250:
+            score += 5
+
+        if liquidity >= 10000:
+            score += 30
+        elif liquidity > 0:
+            score += 10
+        else:
+            score = min(score, 40)
+
+        score = max(0, min(100, score))
+
+        if liquidity == 0:
+            label = "🟡 مبكر جداً / بدون سيولة"
+        elif score >= 75:
+            label = "🟢 قوي"
+        elif score >= 50:
+            label = "🟡 متوسط"
+        else:
+            label = "🔴 مراقبة فقط"
+
         html += f"""
         <hr>
         <h2>{r['symbol']} - {r['name']}</h2>
+        <p><b>Signal Score:</b> {score}/100 {label}</p>
         <p><b>Price:</b> {r['price']}</p>
         <p><b>Liquidity:</b> {r['liquidity']}</p>
         <p><b>Volume 24h:</b> {r['volume_24h']}</p>
