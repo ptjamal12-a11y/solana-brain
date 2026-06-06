@@ -169,6 +169,9 @@ def stats():
         )
 
     return html
+    @app.route("/top")
+def top():
+    return "<h1>Top Tokens</h1>"
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
