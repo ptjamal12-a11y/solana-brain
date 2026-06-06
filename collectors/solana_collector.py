@@ -5,37 +5,34 @@ def get_solana_pairs():
 
     try:
         response = requests.get(url, timeout=15)
-        print("Status Code:", response.status_code)
-
-        if response.status_code != 200:
-            print("DexScreener error:", response.text[:200])
-            return []
-
         data = response.json()
-        pairs = data.get("pairs", [])
-        solana_pairs = [p for p in pairs if p.get("chainId") == "solana"]
 
+        pairs = data.get("pairs", [])
+
+        solana_pairs = []
+        for p in pairs:
+            if p.get("chainId") != "solana":
+                continue
+
+            liquidity = p.get("liquidity", {}).get("usd")
+            volume_24h = p.get("volume", {}).get("h24")
+            change_24h = p.get("priceChange", {}).get("h24")
+
+            if liquidity is None:
+                continue
+
+            solana_pairs.append({
+                "symbol": p.get("baseToken", {}).get("symbol", "Unknown"),
+                "name": p.get("baseToken", {}).get("name", "Unknown"),
+                "price": p.get("priceUsd", "N/A"),
+                "liquidity": liquidity,
+                "volume_24h": volume_24h,
+                "change_24h": change_24h
+            })
+
+        solana_pairs.sort(key=lambda x: x["liquidity"], reverse=True)
         return solana_pairs[:5]
 
     except Exception as e:
         print("Collector error:", e)
         return []
-
-
-def start():
-    pairs = get_solana_pairs()
-
-    print("Solana Collector Started")
-    print(f"Found {len(pairs)} Solana pairs")
-
-    for pair in pairs:
-        base = pair.get("baseToken", {})
-        print(
-            base.get("symbol"),
-            pair.get("priceUsd"),
-            pair.get("liquidity", {}).get("usd")
-        )
-
-
-if __name__ == "__main__":
-    start()
