@@ -911,7 +911,73 @@ def source_ranking():
 
     html += '<p><a href="/">Back Home</a></p>'
     return html
+@app.route("/collect-recommendations")
+def collect_recommendations():
+    pairs = get_solana_pairs()
 
+    conn = get_connection()
+    cur = conn.cursor()
+
+    saved = 0
+
+    for pair in pairs:
+        symbol = pair.get("symbol")
+        name = pair.get("name")
+        address = pair.get("address")
+        price = pair.get("price")
+        pair_url = pair.get("pair_url")
+
+        if not symbol or not address:
+            continue
+
+        source = "dexscreener_auto"
+        text = "Auto detected from DexScreener Solana scan"
+
+        cur.execute("""
+            SELECT id
+            FROM recommendations
+            WHERE token_address = %s
+              AND source = %s
+              AND created_at > NOW() - INTERVAL '6 hours'
+            LIMIT 1
+        """, (address, source))
+
+        exists = cur.fetchone()
+
+        if exists:
+            continue
+
+        cur.execute("""
+            INSERT INTO recommendations (
+                source,
+                symbol,
+                token_name,
+                token_address,
+                recommendation_text,
+                price_at_recommendation,
+                pair_url
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+        """, (
+            source,
+            symbol,
+            name,
+            address,
+            text,
+            price,
+            pair_url
+        ))
+
+        saved += 1
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    return {
+        "saved_recommendations": saved,
+        "source": "dexscreener_auto"
+    }
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
