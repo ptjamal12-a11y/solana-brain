@@ -8,16 +8,30 @@ app = Flask(__name__)
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
+
 def send_telegram(message):
-    if BOT_TOKEN and CHAT_ID:
+    if not BOT_TOKEN or not CHAT_ID:
+        print("Telegram env not set")
+        return
+
+    try:
         requests.post(
             f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-            json={"chat_id": CHAT_ID, "text": message}
+            json={
+                "chat_id": CHAT_ID,
+                "text": message,
+                "disable_web_page_preview": True
+            },
+            timeout=15
         )
+    except Exception as e:
+        print("Telegram error:", e)
+
 
 @app.route("/")
 def home():
     return "Solana Brain is running"
+
 
 @app.route("/scan")
 def scan():
@@ -30,15 +44,19 @@ def scan():
     else:
         for pair in pairs:
             message += (
-                f"📌 {pair['symbol']} - {pair['name']}\n"
-                f"💵 السعر: {pair['price']}\n"
-                f"💰 السيولة: {pair['liquidity']}\n"
-                f"📊 حجم 24h: {pair['volume_24h']}\n"
-                f"📈 تغير 24h: {pair['change_24h']}%\n\n"
+                f"📌 {pair.get('symbol', 'Unknown')} - {pair.get('name', 'Unknown')}\n"
+                f"💵 السعر: {pair.get('price', 'N/A')}\n"
+                f"💰 السيولة: {pair.get('liquidity', 0)}\n"
+                f"📊 حجم 24h: {pair.get('volume_24h', 0)}\n"
+                f"📈 تغير 24h: {pair.get('change_24h', 'N/A')}%\n"
+                f"🏦 DEX: {pair.get('dex', 'unknown')}\n"
+                f"🔗 {pair.get('pair_url', '')}\n\n"
             )
 
     send_telegram(message)
     return "Smart report sent to Telegram"
 
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
