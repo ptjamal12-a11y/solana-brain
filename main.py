@@ -1040,12 +1040,26 @@ def binance_scan():
 
     saved = 0
     results = []
+    errors = []
 
     for symbol in BINANCE_SYMBOLS:
         try:
             url = f"https://api.binance.com/api/v3/ticker/24hr?symbol={symbol}"
-            r = requests.get(url, timeout=15)
+            r = requests.get(
+                url,
+                timeout=15,
+                headers={"User-Agent": "Mozilla/5.0"}
+            )
+
             data = r.json()
+
+            if r.status_code != 200 or "lastPrice" not in data:
+                errors.append({
+                    "symbol": symbol,
+                    "status": r.status_code,
+                    "response": data
+                })
+                continue
 
             price = safe_float(data.get("lastPrice"))
             change = safe_float(data.get("priceChangePercent"))
@@ -1085,7 +1099,10 @@ def binance_scan():
             })
 
         except Exception as e:
-            print("Binance scan error:", symbol, e, flush=True)
+            errors.append({
+                "symbol": symbol,
+                "error": str(e)
+            })
 
     conn.commit()
     cur.close()
@@ -1093,7 +1110,8 @@ def binance_scan():
 
     return {
         "saved": saved,
-        "results": results
+        "results": results,
+        "errors": errors
     }
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
