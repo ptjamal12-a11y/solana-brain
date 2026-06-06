@@ -477,7 +477,50 @@ def signals():
 
     html += '<p><a href="/">Back Home</a></p>'
     return html
+@app.route("/early")
+def early():
+    conn = get_connection()
+    cur = conn.cursor()
 
+    cur.execute("""
+        SELECT
+            symbol,
+            name,
+            price,
+            liquidity,
+            volume_24h,
+            change_24h,
+            pair_url,
+            created_at
+        FROM market_snapshots
+        WHERE liquidity = 0
+          AND volume_24h >= 30000
+          AND change_24h > 10
+        ORDER BY volume_24h DESC, change_24h DESC
+        LIMIT 30
+    """)
+
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    html = "<h1>🟡 Early Gems</h1>"
+    html += "<p>عملات مبكرة جداً من Pump.fun بدون سيولة حقيقية، للمراقبة فقط.</p>"
+
+    for r in rows:
+        html += f"""
+        <hr>
+        <h2>{r['symbol']} - {r['name']}</h2>
+        <p><b>Price:</b> {r['price']}</p>
+        <p><b>Liquidity:</b> {r['liquidity']}</p>
+        <p><b>Volume 24h:</b> {r['volume_24h']}</p>
+        <p><b>Change 24h:</b> {r['change_24h']}%</p>
+        <p><b>Seen At:</b> {r['created_at']}</p>
+        <p><a href="{r['pair_url']}" target="_blank">Open DexScreener</a></p>
+        """
+
+    html += '<p><a href="/">Back Home</a></p>'
+    return html
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
