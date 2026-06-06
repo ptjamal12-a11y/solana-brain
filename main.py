@@ -122,7 +122,53 @@ def scan():
         "count": count
     }
 
+from database import get_connection
 
+@app.route("/stats")
+def stats():
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT COUNT(*) AS total
+        FROM market_snapshots
+    """)
+    total = cur.fetchone()["total"]
+
+    cur.execute("""
+        SELECT COUNT(DISTINCT token_address) AS unique_tokens
+        FROM market_snapshots
+    """)
+    unique_tokens = cur.fetchone()["unique_tokens"]
+
+    cur.execute("""
+        SELECT symbol, name, COUNT(*) AS appearances
+        FROM market_snapshots
+        GROUP BY symbol, name
+        ORDER BY appearances DESC
+        LIMIT 10
+    """)
+    top_tokens = cur.fetchall()
+
+    cur.close()
+    conn.close()
+
+    html = f"""
+    <h1>🧠 Solana Brain Stats</h1>
+    <p><b>💾 Total Records:</b> {total}</p>
+    <p><b>🪙 Unique Tokens:</b> {unique_tokens}</p>
+
+    <h2>🔥 Most Tracked Tokens</h2>
+    """
+
+    for token in top_tokens:
+        html += (
+            f"<p>{token['symbol']} - "
+            f"{token['name']} "
+            f"({token['appearances']} مرات)</p>"
+        )
+
+    return html
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
