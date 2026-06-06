@@ -1000,7 +1000,101 @@ def collect_recommendations():
         "source": "dexscreener_auto_filtered"
     }
 
+BINANCE_SYMBOLS = [
+    "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",
+    "DOGEUSDT", "SHIBUSDT", "PEPEUSDT", "BONKUSDT",
+    "WIFUSDT", "FLOKIUSDT"
+]
 
+
+@app.route("/init-binance")
+def init_binance():
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS binance_snapshots (
+            id SERIAL PRIMARY KEY,
+            symbol TEXT,
+            price NUMERIC,
+            price_change_percent NUMERIC,
+            volume NUMERIC,
+            quote_volume NUMERIC,
+            high_price NUMERIC,
+            low_price NUMERIC,
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    """)
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    return "Binance table initialized"
+
+
+@app.route("/binance-scan")
+def binance_scan():
+    conn = get_connection()
+    cur = conn.cursor()
+
+    saved = 0
+    results = []
+
+    for symbol in BINANCE_SYMBOLS:
+        try:
+            url = f"https://api.binance.com/api/v3/ticker/24hr?symbol={symbol}"
+            r = requests.get(url, timeout=15)
+            data = r.json()
+
+            price = safe_float(data.get("lastPrice"))
+            change = safe_float(data.get("priceChangePercent"))
+            volume = safe_float(data.get("volume"))
+            quote_volume = safe_float(data.get("quoteVolume"))
+            high_price = safe_float(data.get("highPrice"))
+            low_price = safe_float(data.get("lowPrice"))
+
+            cur.execute("""
+                INSERT INTO binance_snapshots (
+                    symbol,
+                    price,
+                    price_change_percent,
+                    volume,
+                    quote_volume,
+                    high_price,
+                    low_price
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """, (
+                symbol,
+                price,
+                change,
+                volume,
+                quote_volume,
+                high_price,
+                low_price
+            ))
+
+            saved += 1
+
+            results.append({
+                "symbol": symbol,
+                "price": price,
+                "change_24h": change,
+                "quote_volume": quote_volume
+            })
+
+        except Exception as e:
+            print("Binance scan error:", symbol, e, flush=True)
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    return {
+        "saved": saved,
+        "results": results
+    }
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
