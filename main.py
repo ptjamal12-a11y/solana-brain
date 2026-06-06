@@ -62,6 +62,42 @@ def classify_pair(pair):
     return "⚪ مراقبة فقط"
 
 
+def calculate_signal_score(pair):
+    liquidity = safe_float(pair.get("liquidity"))
+    volume = safe_float(pair.get("volume_24h"))
+    change = safe_float(pair.get("change_24h"))
+
+    score = 0
+
+    if liquidity >= 100000:
+        score += 35
+    elif liquidity >= 10000:
+        score += 25
+    elif liquidity > 0:
+        score += 10
+
+    if volume >= 200000:
+        score += 35
+    elif volume >= 50000:
+        score += 25
+    elif volume >= 10000:
+        score += 10
+
+    if 10 <= change <= 120:
+        score += 30
+    elif 120 < change <= 200:
+        score += 15
+    elif change > 300:
+        score -= 25
+    elif change < -50:
+        score -= 30
+
+    if liquidity == 0:
+        score = min(score, 40)
+
+    return max(0, min(100, score))
+
+
 @app.route("/")
 def home():
     return """
@@ -70,6 +106,8 @@ def home():
     <p><a href="/debug">Debug</a></p>
     <p><a href="/stats">Stats</a></p>
     <p><a href="/top">Top Tokens</a></p>
+    <p><a href="/winners">Winners</a></p>
+    <p><a href="/signals">Signals</a></p>
     """
 
 
@@ -97,6 +135,8 @@ def scan():
     message += f"🕒 Scan time: {int(time.time())}\n"
     message += f"📊 عدد النتائج: {count}\n\n"
 
+    signal_messages = []
+
     if count == 0:
         message += "لا توجد بيانات حالياً."
     else:
@@ -104,12 +144,24 @@ def scan():
 
         for pair in pairs:
             classification = classify_pair(pair)
+            signal_score = calculate_signal_score(pair)
 
             try:
                 save_market_snapshot(pair, classification)
                 saved_count += 1
             except Exception as e:
                 print("DB save error:", e, flush=True)
+
+            if signal_score >= 75:
+                signal_messages.append(
+                    f"🚨 إشارة قوية\n"
+                    f"📌 {pair.get('symbol')} - {pair.get('name')}\n"
+                    f"Score: {signal_score}/100\n"
+                    f"💰 السيولة: {pair.get('liquidity')}\n"
+                    f"📊 الحجم 24h: {pair.get('volume_24h')}\n"
+                    f"📈 التغير 24h: {pair.get('change_24h')}%\n"
+                    f"🔗 {pair.get('pair_url')}"
+                )
 
             message += (
                 f"📌 {pair.get('symbol', 'Unknown')} - {pair.get('name', 'Unknown')}\n"
@@ -118,6 +170,7 @@ def scan():
                 f"📊 حجم 24h: {pair.get('volume_24h', 0)}\n"
                 f"📈 تغير 24h: {pair.get('change_24h', 'N/A')}%\n"
                 f"🧪 التصنيف: {classification}\n"
+                f"🎯 Signal Score: {signal_score}/100\n"
                 f"🏦 DEX: {pair.get('dex', 'unknown')}\n"
                 f"🔗 {pair.get('pair_url', '')}\n\n"
             )
@@ -126,9 +179,13 @@ def scan():
 
     send_telegram(message)
 
+    for alert in signal_messages:
+        send_telegram(alert)
+
     return {
         "sent": True,
-        "count": count
+        "count": count,
+        "signals": len(signal_messages)
     }
 
 
@@ -159,7 +216,6 @@ def stats():
     <h1>🧠 Solana Brain Stats</h1>
     <p><b>💾 Total Records:</b> {total}</p>
     <p><b>🪙 Unique Tokens:</b> {unique_tokens}</p>
-
     <h2>🔥 Most Tracked Tokens</h2>
     """
 
@@ -192,14 +248,10 @@ def top():
     """)
 
     tokens = cur.fetchall()
-
     cur.close()
     conn.close()
 
-    html = """
-    <h1>🏆 Top Solana Tokens</h1>
-    <p>هذه الصفحة تعرض أفضل العملات حسب البيانات المخزنة.</p>
-    """
+    html = "<h1>🏆 Top Solana Tokens</h1>"
 
     for token in tokens:
         appearances = safe_float(token["appearances"])
@@ -237,7 +289,6 @@ def top():
         elif avg_change < -50:
             score -= 20
 
-        # مهم: أي عملة بدون سيولة لا تتجاوز 40 نقطة
         if avg_liquidity == 0:
             score = min(score, 40)
 
@@ -265,6 +316,7 @@ def top():
 
     html += '<p><a href="/">Back Home</a></p>'
     return html
+
 
 @app.route("/winners")
 def winners():
@@ -339,6 +391,53 @@ def winners():
 
     html += '<p><a href="/">Back Home</a></p>'
     return html
+
+
+@app.route("/signals")
+def signals():
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            symbol,
+            name,
+            price,
+            liquidity,
+            volume_24h,
+            change_24h,
+            pair_url,
+            created_at
+        FROM market_snapshots
+        WHERE liquidity >= 10000
+          AND volume_24h >= 50000
+          AND change_24h BETWEEN 10 AND 200
+        ORDER BY created_at DESC
+        LIMIT 30
+    """)
+
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    html = "<h1>🚨 Signals</h1>"
+    html += "<p>آخر الفرص القوية حسب شروط السيولة والحجم والزخم.</p>"
+
+    for r in rows:
+        html += f"""
+        <hr>
+        <h2>{r['symbol']} - {r['name']}</h2>
+        <p><b>Price:</b> {r['price']}</p>
+        <p><b>Liquidity:</b> {r['liquidity']}</p>
+        <p><b>Volume 24h:</b> {r['volume_24h']}</p>
+        <p><b>Change 24h:</b> {r['change_24h']}%</p>
+        <p><b>Seen At:</b> {r['created_at']}</p>
+        <p><a href="{r['pair_url']}" target="_blank">Open DexScreener</a></p>
+        """
+
+    html += '<p><a href="/">Back Home</a></p>'
+    return html
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
