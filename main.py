@@ -266,6 +266,79 @@ def top():
     html += '<p><a href="/">Back Home</a></p>'
     return html
 
+@app.route("/winners")
+def winners():
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        WITH first_rows AS (
+            SELECT DISTINCT ON (token_address)
+                token_address,
+                symbol,
+                name,
+                price AS first_price,
+                created_at AS first_seen
+            FROM market_snapshots
+            WHERE price IS NOT NULL AND price > 0
+            ORDER BY token_address, created_at ASC
+        ),
+        latest_rows AS (
+            SELECT DISTINCT ON (token_address)
+                token_address,
+                price AS latest_price,
+                created_at AS last_seen,
+                pair_url
+            FROM market_snapshots
+            WHERE price IS NOT NULL AND price > 0
+            ORDER BY token_address, created_at DESC
+        )
+        SELECT
+            f.symbol,
+            f.name,
+            f.first_price,
+            l.latest_price,
+            ROUND(((l.latest_price - f.first_price) / f.first_price * 100)::numeric, 2) AS roi,
+            f.first_seen,
+            l.last_seen,
+            l.pair_url
+        FROM first_rows f
+        JOIN latest_rows l ON f.token_address = l.token_address
+        WHERE f.first_price > 0
+        ORDER BY roi DESC
+        LIMIT 20
+    """)
+
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    html = "<h1>🚀 Winners</h1>"
+    html += "<p>العملات التي ارتفعت بعد أول رصد لها.</p>"
+
+    for r in rows:
+        roi = float(r["roi"] or 0)
+
+        if roi > 100:
+            label = "🟢 انفجار قوي"
+        elif roi > 30:
+            label = "🟡 صعود جيد"
+        elif roi > 0:
+            label = "⚪ صعود بسيط"
+        else:
+            label = "🔴 لم تنجح"
+
+        html += f"""
+        <hr>
+        <h2>{r['symbol']} - {r['name']}</h2>
+        <p><b>ROI:</b> {r['roi']}% {label}</p>
+        <p><b>First Price:</b> {r['first_price']}</p>
+        <p><b>Latest Price:</b> {r['latest_price']}</p>
+        <p><a href="{r['pair_url']}" target="_blank">Open DexScreener</a></p>
+        """
+
+    html += '<p><a href="/">Back Home</a></p>'
+    return html
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
