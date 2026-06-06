@@ -1,9 +1,7 @@
 from flask import Flask
 from collectors.solana_collector import get_solana_pairs
 from database import init_db, save_market_snapshot, get_connection
-import os
-import requests
-import time
+import os, requests, time
 
 app = Flask(__name__)
 
@@ -13,17 +11,11 @@ CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 def send_telegram(message):
     if not BOT_TOKEN or not CHAT_ID:
-        print("Telegram env not set", flush=True)
         return
-
     try:
         requests.post(
             f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-            json={
-                "chat_id": CHAT_ID,
-                "text": message,
-                "disable_web_page_preview": True
-            },
+            json={"chat_id": CHAT_ID, "text": message, "disable_web_page_preview": True},
             timeout=15
         )
     except Exception as e:
@@ -46,19 +38,14 @@ def classify_pair(pair):
 
     if liquidity == 0:
         return "🟡 مبكر جداً / Pump.fun بدون سيولة"
-
     if liquidity < 5000:
         return "🔴 سيولة ضعيفة جداً"
-
     if change < -50:
         return "🔴 انهيار قوي"
-
     if change > 300:
         return "🔴 ارتفع كثيراً - احتمال دخول متأخر"
-
     if volume > 50000 and liquidity > 10000 and 10 <= change <= 200:
         return "🟢 قابل للمتابعة"
-
     return "⚪ مراقبة فقط"
 
 
@@ -98,6 +85,54 @@ def calculate_signal_score(pair):
     return max(0, min(100, score))
 
 
+def moonshot_score(appearances, volume, liquidity, change):
+    appearances = safe_float(appearances)
+    volume = safe_float(volume)
+    liquidity = safe_float(liquidity)
+    change = safe_float(change)
+
+    score = 0
+
+    if appearances >= 5:
+        score += 30
+    elif appearances >= 3:
+        score += 20
+    else:
+        score += 10
+
+    if volume >= 200000:
+        score += 35
+    elif volume >= 100000:
+        score += 30
+    elif volume >= 50000:
+        score += 20
+    elif volume >= 30000:
+        score += 10
+
+    if liquidity >= 100000:
+        score += 25
+    elif liquidity >= 10000:
+        score += 20
+    elif liquidity > 0:
+        score += 10
+    elif liquidity == 0:
+        score -= 30
+
+    if 20 <= change <= 120:
+        score += 20
+    elif 120 < change <= 200:
+        score += 10
+    elif change > 300:
+        score -= 15
+    elif change < -50:
+        score -= 20
+
+    if liquidity == 0:
+        score = min(score, 40)
+
+    return max(0, min(100, score))
+
+
 @app.route("/")
 def home():
     return """
@@ -108,16 +143,16 @@ def home():
     <p><a href="/top">Top Tokens</a></p>
     <p><a href="/winners">Winners</a></p>
     <p><a href="/signals">Signals</a></p>
+    <p><a href="/early">Early Gems</a></p>
+    <p><a href="/moonshots">Moonshots</a></p>
+    <p><a href="/alerts">Alerts</a></p>
     """
 
 
 @app.route("/debug")
 def debug():
     pairs = get_solana_pairs()
-    return {
-        "count": len(pairs),
-        "pairs": pairs[:3]
-    }
+    return {"count": len(pairs), "pairs": pairs[:3]}
 
 
 @app.route("/init-db")
@@ -182,11 +217,7 @@ def scan():
     for alert in signal_messages:
         send_telegram(alert)
 
-    return {
-        "sent": True,
-        "count": count,
-        "signals": len(signal_messages)
-    }
+    return {"sent": True, "count": count, "signals": len(signal_messages)}
 
 
 @app.route("/stats")
@@ -233,9 +264,7 @@ def top():
 
     cur.execute("""
         SELECT
-            token_address,
-            symbol,
-            name,
+            token_address, symbol, name,
             COUNT(*) AS appearances,
             ROUND(AVG(volume_24h)::numeric, 2) AS avg_volume,
             ROUND(AVG(liquidity)::numeric, 2) AS avg_liquidity,
@@ -254,45 +283,14 @@ def top():
     html = "<h1>🏆 Top Solana Tokens</h1>"
 
     for token in tokens:
-        appearances = safe_float(token["appearances"])
-        avg_volume = safe_float(token["avg_volume"])
+        score = moonshot_score(
+            token["appearances"],
+            token["avg_volume"],
+            token["avg_liquidity"],
+            token["avg_change"]
+        )
+
         avg_liquidity = safe_float(token["avg_liquidity"])
-        avg_change = safe_float(token["avg_change"])
-
-        score = 0
-
-        if appearances >= 10:
-            score += 30
-        elif appearances >= 5:
-            score += 25
-        elif appearances >= 3:
-            score += 15
-        else:
-            score += 5
-
-        if avg_volume >= 100000:
-            score += 30
-        elif avg_volume >= 50000:
-            score += 20
-        elif avg_volume >= 10000:
-            score += 10
-
-        if avg_liquidity >= 10000:
-            score += 25
-        elif avg_liquidity > 0:
-            score += 10
-
-        if 10 <= avg_change <= 200:
-            score += 20
-        elif avg_change > 300:
-            score -= 15
-        elif avg_change < -50:
-            score -= 20
-
-        if avg_liquidity == 0:
-            score = min(score, 40)
-
-        score = max(0, min(100, score))
 
         if avg_liquidity == 0:
             label = "🟡 مبكر جداً / بدون سيولة"
@@ -326,9 +324,7 @@ def winners():
     cur.execute("""
         WITH first_rows AS (
             SELECT DISTINCT ON (token_address)
-                token_address,
-                symbol,
-                name,
+                token_address, symbol, name,
                 price AS first_price,
                 created_at AS first_seen
             FROM market_snapshots
@@ -346,14 +342,9 @@ def winners():
             ORDER BY token_address, created_at DESC
         )
         SELECT
-            f.symbol,
-            f.name,
-            f.first_price,
-            l.latest_price,
+            f.symbol, f.name, f.first_price, l.latest_price,
             ROUND(((l.latest_price - f.first_price) / f.first_price * 100)::numeric, 2) AS roi,
-            f.first_seen,
-            l.last_seen,
-            l.pair_url
+            f.first_seen, l.last_seen, l.pair_url
         FROM first_rows f
         JOIN latest_rows l ON f.token_address = l.token_address
         WHERE f.first_price > 0
@@ -369,7 +360,7 @@ def winners():
     html += "<p>العملات التي ارتفعت بعد أول رصد لها.</p>"
 
     for r in rows:
-        roi = float(r["roi"] or 0)
+        roi = safe_float(r["roi"])
 
         if roi > 100:
             label = "🟢 انفجار قوي"
@@ -399,15 +390,7 @@ def signals():
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT
-            symbol,
-            name,
-            price,
-            liquidity,
-            volume_24h,
-            change_24h,
-            pair_url,
-            created_at
+        SELECT symbol, name, price, liquidity, volume_24h, change_24h, pair_url, created_at
         FROM market_snapshots
         WHERE volume_24h >= 30000
           AND change_24h > 20
@@ -420,39 +403,16 @@ def signals():
     conn.close()
 
     html = "<h1>🚨 Signals</h1>"
-    html += "<p>آخر الفرص حسب الحجم والزخم، حتى لو كانت بدون سيولة حقيقية.</p>"
+    html += "<p>آخر الفرص حسب الحجم والزخم.</p>"
 
     for r in rows:
+        pair = {
+            "liquidity": r["liquidity"],
+            "volume_24h": r["volume_24h"],
+            "change_24h": r["change_24h"]
+        }
+        score = calculate_signal_score(pair)
         liquidity = safe_float(r["liquidity"])
-        volume = safe_float(r["volume_24h"])
-        change = safe_float(r["change_24h"])
-
-        score = 0
-
-        if volume >= 200000:
-            score += 40
-        elif volume >= 100000:
-            score += 30
-        elif volume >= 50000:
-            score += 20
-        else:
-            score += 10
-
-        if 20 <= change <= 120:
-            score += 30
-        elif 120 < change <= 250:
-            score += 20
-        elif change > 250:
-            score += 5
-
-        if liquidity >= 10000:
-            score += 30
-        elif liquidity > 0:
-            score += 10
-        else:
-            score = min(score, 40)
-
-        score = max(0, min(100, score))
 
         if liquidity == 0:
             label = "🟡 مبكر جداً / بدون سيولة"
@@ -477,21 +437,15 @@ def signals():
 
     html += '<p><a href="/">Back Home</a></p>'
     return html
+
+
 @app.route("/early")
 def early():
     conn = get_connection()
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT
-            symbol,
-            name,
-            price,
-            liquidity,
-            volume_24h,
-            change_24h,
-            pair_url,
-            created_at
+        SELECT symbol, name, price, liquidity, volume_24h, change_24h, pair_url, created_at
         FROM market_snapshots
         WHERE liquidity = 0
           AND volume_24h >= 30000
@@ -521,6 +475,8 @@ def early():
 
     html += '<p><a href="/">Back Home</a></p>'
     return html
+
+
 @app.route("/moonshots")
 def moonshots():
     conn = get_connection()
@@ -528,9 +484,7 @@ def moonshots():
 
     cur.execute("""
         SELECT
-            token_address,
-            symbol,
-            name,
+            token_address, symbol, name,
             COUNT(*) AS appearances,
             ROUND(AVG(volume_24h)::numeric, 2) AS avg_volume,
             ROUND(AVG(liquidity)::numeric, 2) AS avg_liquidity,
@@ -548,40 +502,31 @@ def moonshots():
     conn.close()
 
     html = "<h1>🚀 Moonshots</h1>"
-    html += "<p>أفضل المرشحين حسب النشاط والتكرار.</p>"
+    html += "<p>أفضل المرشحين حسب النشاط والتكرار والسيولة.</p>"
 
     for r in rows:
-        score = 0
+        score = moonshot_score(
+            r["appearances"],
+            r["avg_volume"],
+            r["avg_liquidity"],
+            r["avg_change"]
+        )
 
-        appearances = safe_float(r["appearances"])
-        volume = safe_float(r["avg_volume"])
         liquidity = safe_float(r["avg_liquidity"])
-        change = safe_float(r["avg_change"])
 
-        if appearances >= 5:
-            score += 30
-        elif appearances >= 3:
-            score += 20
+        if liquidity == 0:
+            label = "🟡 مبكر جداً / بدون سيولة"
+        elif score >= 75:
+            label = "🟢 قوي"
+        elif score >= 50:
+            label = "🟡 متوسط"
         else:
-            score += 10
-
-        if volume >= 100000:
-            score += 30
-        elif volume >= 50000:
-            score += 20
-
-        if liquidity >= 10000:
-            score += 20
-
-        if 20 <= change <= 200:
-            score += 20
-
-        score = min(score, 100)
+            label = "🔴 مراقبة فقط"
 
         html += f"""
         <hr>
         <h2>{r['symbol']} - {r['name']}</h2>
-        <p><b>Moonshot Score:</b> {score}/100</p>
+        <p><b>Moonshot Score:</b> {score}/100 {label}</p>
         <p><b>Appearances:</b> {r['appearances']}</p>
         <p><b>Avg Volume:</b> {r['avg_volume']}</p>
         <p><b>Avg Liquidity:</b> {r['avg_liquidity']}</p>
@@ -591,7 +536,64 @@ def moonshots():
 
     html += '<p><a href="/">Back Home</a></p>'
     return html
-    
+
+
+@app.route("/alerts")
+def alerts():
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            token_address, symbol, name,
+            COUNT(*) AS appearances,
+            ROUND(AVG(volume_24h)::numeric, 2) AS avg_volume,
+            ROUND(AVG(liquidity)::numeric, 2) AS avg_liquidity,
+            ROUND(AVG(change_24h)::numeric, 2) AS avg_change,
+            MAX(pair_url) AS pair_url
+        FROM market_snapshots
+        GROUP BY token_address, symbol, name
+        HAVING AVG(liquidity) >= 10000
+           AND AVG(volume_24h) >= 50000
+        ORDER BY AVG(volume_24h) DESC
+        LIMIT 20
+    """)
+
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    html = "<h1>🚨 Alerts</h1>"
+    html += "<p>فرص أقوى بسيولة حقيقية وحجم تداول جيد.</p>"
+
+    for r in rows:
+        score = moonshot_score(
+            r["appearances"],
+            r["avg_volume"],
+            r["avg_liquidity"],
+            r["avg_change"]
+        )
+
+        if score < 60:
+            continue
+
+        label = "🟢 قوي" if score >= 75 else "🟡 متوسط"
+
+        html += f"""
+        <hr>
+        <h2>{r['symbol']} - {r['name']}</h2>
+        <p><b>Alert Score:</b> {score}/100 {label}</p>
+        <p><b>Appearances:</b> {r['appearances']}</p>
+        <p><b>Avg Volume:</b> {r['avg_volume']}</p>
+        <p><b>Avg Liquidity:</b> {r['avg_liquidity']}</p>
+        <p><b>Avg Change:</b> {r['avg_change']}%</p>
+        <p><a href="{r['pair_url']}" target="_blank">Open DexScreener</a></p>
+        """
+
+    html += '<p><a href="/">Back Home</a></p>'
+    return html
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
