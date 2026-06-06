@@ -214,7 +214,19 @@ def init_ai():
             created_at TIMESTAMP DEFAULT NOW()
         )
     """)
-
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS binance_snapshots (
+            id SERIAL PRIMARY KEY,
+            symbol TEXT,
+            price NUMERIC,
+            price_change_percent NUMERIC,
+            volume NUMERIC,
+            quote_volume NUMERIC,
+            high_price NUMERIC,
+            low_price NUMERIC,
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    """)
     conn.commit()
     cur.close()
     conn.close()
@@ -1000,11 +1012,19 @@ def collect_recommendations():
         "source": "dexscreener_auto_filtered"
     }
 
-BINANCE_SYMBOLS = [
-    "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",
-    "DOGEUSDT", "SHIBUSDT", "PEPEUSDT", "BONKUSDT",
-    "WIFUSDT", "FLOKIUSDT"
-]
+COINGECKO_BINANCE_COINS = {
+    "BTCUSDT": "bitcoin",
+    "ETHUSDT": "ethereum",
+    "SOLUSDT": "solana",
+    "BNBUSDT": "binancecoin",
+    "XRPUSDT": "ripple",
+    "DOGEUSDT": "dogecoin",
+    "SHIBUSDT": "shiba-inu",
+    "PEPEUSDT": "pepe",
+    "BONKUSDT": "bonk",
+    "WIFUSDT": "dogwifcoin",
+    "FLOKIUSDT": "floki"
+}
 
 
 @app.route("/init-binance")
@@ -1042,31 +1062,51 @@ def binance_scan():
     results = []
     errors = []
 
-    for symbol in BINANCE_SYMBOLS:
-        try:
-            url = f"https://api.binance.com/api/v3/ticker/24hr?symbol={symbol}"
-            r = requests.get(
-                url,
-                timeout=15,
-                headers={"User-Agent": "Mozilla/5.0"}
-            )
+    ids = ",".join(COINGECKO_BINANCE_COINS.values())
 
-            data = r.json()
+    try:
+        url = "https://api.coingecko.com/api/v3/coins/markets"
+        params = {
+            "vs_currency": "usd",
+            "ids": ids,
+            "order": "market_cap_desc",
+            "per_page": 250,
+            "page": 1,
+            "sparkline": "false",
+            "price_change_percentage": "24h"
+        }
 
-            if r.status_code != 200 or "lastPrice" not in data:
+        r = requests.get(url, params=params, timeout=20)
+
+        if r.status_code != 200:
+            cur.close()
+            conn.close()
+            return {
+                "saved": 0,
+                "error": "CoinGecko request failed",
+                "status": r.status_code,
+                "response": r.text[:500]
+            }
+
+        data = r.json()
+        by_id = {item.get("id"): item for item in data}
+
+        for symbol, coin_id in COINGECKO_BINANCE_COINS.items():
+            item = by_id.get(coin_id)
+
+            if not item:
                 errors.append({
                     "symbol": symbol,
-                    "status": r.status_code,
-                    "response": data
+                    "error": "coin not found"
                 })
                 continue
 
-            price = safe_float(data.get("lastPrice"))
-            change = safe_float(data.get("priceChangePercent"))
-            volume = safe_float(data.get("volume"))
-            quote_volume = safe_float(data.get("quoteVolume"))
-            high_price = safe_float(data.get("highPrice"))
-            low_price = safe_float(data.get("lowPrice"))
+            price = safe_float(item.get("current_price"))
+            change = safe_float(item.get("price_change_percentage_24h"))
+            volume = safe_float(item.get("total_volume"))
+            quote_volume = safe_float(item.get("total_volume"))
+            high_price = safe_float(item.get("high_24h"))
+            low_price = safe_float(item.get("low_24h"))
 
             cur.execute("""
                 INSERT INTO binance_snapshots (
@@ -1095,23 +1135,25 @@ def binance_scan():
                 "symbol": symbol,
                 "price": price,
                 "change_24h": change,
-                "quote_volume": quote_volume
+                "quote_volume": quote_volume,
+                "high_24h": high_price,
+                "low_24h": low_price,
+                "source": "coingecko"
             })
 
-        except Exception as e:
-            errors.append({
-                "symbol": symbol,
-                "error": str(e)
-            })
+        conn.commit()
 
-    conn.commit()
+    except Exception as e:
+        errors.append({"error": str(e)})
+
     cur.close()
     conn.close()
 
     return {
         "saved": saved,
         "results": results,
-        "errors": errors
+        "errors": errors,
+        "source": "coingecko"
     }
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
