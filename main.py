@@ -11,7 +11,7 @@ CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 def send_telegram(message):
     if not BOT_TOKEN or not CHAT_ID:
-        print("Telegram env not set")
+        print("Telegram env not set", flush=True)
         return
 
     try:
@@ -25,7 +25,7 @@ def send_telegram(message):
             timeout=15
         )
     except Exception as e:
-        print("Telegram error:", e)
+        print("Telegram error:", e, flush=True)
 
 
 def safe_float(value, default=0):
@@ -65,9 +65,20 @@ def home():
     return "Solana Brain is running"
 
 
+@app.route("/debug")
+def debug():
+    pairs = get_solana_pairs()
+    return {
+        "count": len(pairs),
+        "pairs": pairs[:3]
+    }
+
+
 @app.route("/scan")
 def scan():
     pairs = get_solana_pairs()
+
+    print("SCAN PAIRS COUNT:", len(pairs), flush=True)
 
     message = "🧠 تقرير فحص سوق سولانا\n\n"
 
