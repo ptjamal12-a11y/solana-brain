@@ -1,6 +1,23 @@
 from flask import Flask
+import os
+import requests
 
 app = Flask(__name__)
+
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
+if BOT_TOKEN and CHAT_ID:
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            json={
+                "chat_id": CHAT_ID,
+                "text": "✅ Solana Brain connected successfully"
+            }
+        )
+    except Exception as e:
+        print(e)
 
 @app.route("/")
 def home():
