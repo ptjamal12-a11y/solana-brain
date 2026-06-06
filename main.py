@@ -1,6 +1,6 @@
 from flask import Flask
 from collectors.solana_collector import get_solana_pairs
-from database import init_db, save_market_snapshot
+from database import init_db, save_market_snapshot, get_connection
 import os
 import requests
 import time
@@ -16,15 +16,18 @@ def send_telegram(message):
         print("Telegram env not set", flush=True)
         return
 
-    requests.post(
-        f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-        json={
-            "chat_id": CHAT_ID,
-            "text": message,
-            "disable_web_page_preview": True
-        },
-        timeout=15
-    )
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            json={
+                "chat_id": CHAT_ID,
+                "text": message,
+                "disable_web_page_preview": True
+            },
+            timeout=15
+        )
+    except Exception as e:
+        print("Telegram error:", e, flush=True)
 
 
 def safe_float(value, default=0):
@@ -61,7 +64,13 @@ def classify_pair(pair):
 
 @app.route("/")
 def home():
-    return "Solana Brain is running"
+    return """
+    <h1>Solana Brain is running</h1>
+    <p><a href="/scan">Run Scan</a></p>
+    <p><a href="/debug">Debug</a></p>
+    <p><a href="/stats">Stats</a></p>
+    <p><a href="/top">Top Tokens</a></p>
+    """
 
 
 @app.route("/debug")
@@ -122,7 +131,6 @@ def scan():
         "count": count
     }
 
-from database import get_connection
 
 @app.route("/stats")
 def stats():
@@ -168,10 +176,101 @@ def stats():
             f"({token['appearances']} مرات)</p>"
         )
 
+    html += '<p><a href="/">Back Home</a></p>'
     return html
-    @app.route("/top")
+
+
+@app.route("/top")
 def top():
-    return "<h1>Top Tokens</h1>"
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            token_address,
+            symbol,
+            name,
+            COUNT(*) AS appearances,
+            ROUND(AVG(volume_24h)::numeric, 2) AS avg_volume,
+            ROUND(AVG(liquidity)::numeric, 2) AS avg_liquidity,
+            ROUND(AVG(change_24h)::numeric, 2) AS avg_change,
+            MAX(pair_url) AS pair_url
+        FROM market_snapshots
+        GROUP BY token_address, symbol, name
+        ORDER BY COUNT(*) DESC, AVG(volume_24h) DESC
+        LIMIT 20
+    """)
+
+    tokens = cur.fetchall()
+
+    cur.close()
+    conn.close()
+
+    html = """
+    <h1>🏆 Top Solana Tokens</h1>
+    <p>هذه الصفحة تعرض أفضل العملات حسب البيانات المخزنة.</p>
+    """
+
+    for token in tokens:
+        appearances = safe_float(token["appearances"])
+        avg_volume = safe_float(token["avg_volume"])
+        avg_liquidity = safe_float(token["avg_liquidity"])
+        avg_change = safe_float(token["avg_change"])
+
+        score = 0
+
+        if appearances >= 10:
+            score += 30
+        elif appearances >= 5:
+            score += 25
+        elif appearances >= 3:
+            score += 15
+        else:
+            score += 5
+
+        if avg_volume >= 100000:
+            score += 30
+        elif avg_volume >= 50000:
+            score += 20
+        elif avg_volume >= 10000:
+            score += 10
+
+        if avg_liquidity >= 10000:
+            score += 25
+        elif avg_liquidity > 0:
+            score += 10
+
+        if 10 <= avg_change <= 200:
+            score += 20
+        elif avg_change > 300:
+            score -= 15
+        elif avg_change < -50:
+            score -= 20
+
+        score = max(0, min(100, score))
+
+        if score >= 75:
+            label = "🟢 قوي"
+        elif score >= 50:
+            label = "🟡 متوسط"
+        else:
+            label = "🔴 ضعيف / مراقبة فقط"
+
+        html += f"""
+        <hr>
+        <h2>{token['symbol']} - {token['name']}</h2>
+        <p><b>Score:</b> {score}/100 {label}</p>
+        <p><b>Appearances:</b> {token['appearances']}</p>
+        <p><b>Avg Volume:</b> {token['avg_volume']}</p>
+        <p><b>Avg Liquidity:</b> {token['avg_liquidity']}</p>
+        <p><b>Avg Change:</b> {token['avg_change']}%</p>
+        <p><a href="{token['pair_url']}" target="_blank">Open DexScreener</a></p>
+        """
+
+    html += '<p><a href="/">Back Home</a></p>'
+    return html
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
