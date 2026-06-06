@@ -1,7 +1,9 @@
-from flask import Flask
+from flask import Flask, request
 from collectors.solana_collector import get_solana_pairs
 from database import init_db, save_market_snapshot, get_connection
-import os, requests, time
+import os
+import requests
+import time
 
 app = Flask(__name__)
 
@@ -115,7 +117,7 @@ def moonshot_score(appearances, volume, liquidity, change):
         score += 20
     elif liquidity > 0:
         score += 10
-    elif liquidity == 0:
+    else:
         score -= 30
 
     if 20 <= change <= 120:
@@ -146,6 +148,11 @@ def home():
     <p><a href="/early">Early Gems</a></p>
     <p><a href="/moonshots">Moonshots</a></p>
     <p><a href="/alerts">Alerts</a></p>
+    <p><a href="/init-ai">Init AI</a></p>
+    <p><a href="/brain">Brain</a></p>
+    <p><a href="/learn">Learn</a></p>
+    <p><a href="/recommendations">Recommendations</a></p>
+    <p><a href="/source-ranking">Source Ranking</a></p>
     """
 
 
@@ -161,6 +168,54 @@ def init_database():
     return "Database initialized"
 
 
+@app.route("/init-ai")
+def init_ai():
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS model_settings (
+            id SERIAL PRIMARY KEY,
+            liquidity_weight FLOAT DEFAULT 25,
+            volume_weight FLOAT DEFAULT 30,
+            change_weight FLOAT DEFAULT 20,
+            appearances_weight FLOAT DEFAULT 25,
+            updated_at TIMESTAMP DEFAULT NOW()
+        )
+    """)
+
+    cur.execute("""
+        INSERT INTO model_settings (
+            liquidity_weight,
+            volume_weight,
+            change_weight,
+            appearances_weight
+        )
+        SELECT 25, 30, 20, 25
+        WHERE NOT EXISTS (SELECT 1 FROM model_settings)
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS recommendations (
+            id SERIAL PRIMARY KEY,
+            source TEXT,
+            symbol TEXT,
+            token_name TEXT,
+            token_address TEXT,
+            recommendation_text TEXT,
+            price_at_recommendation NUMERIC,
+            pair_url TEXT,
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    """)
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    return "AI + recommendations initialized"
+
+
 @app.route("/scan")
 def scan():
     pairs = get_solana_pairs()
@@ -173,427 +228,4 @@ def scan():
     signal_messages = []
 
     if count == 0:
-        message += "لا توجد بيانات حالياً."
-    else:
-        saved_count = 0
-
-        for pair in pairs:
-            classification = classify_pair(pair)
-            signal_score = calculate_signal_score(pair)
-
-            try:
-                save_market_snapshot(pair, classification)
-                saved_count += 1
-            except Exception as e:
-                print("DB save error:", e, flush=True)
-
-            if signal_score >= 75:
-                signal_messages.append(
-                    f"🚨 إشارة قوية\n"
-                    f"📌 {pair.get('symbol')} - {pair.get('name')}\n"
-                    f"Score: {signal_score}/100\n"
-                    f"💰 السيولة: {pair.get('liquidity')}\n"
-                    f"📊 الحجم 24h: {pair.get('volume_24h')}\n"
-                    f"📈 التغير 24h: {pair.get('change_24h')}%\n"
-                    f"🔗 {pair.get('pair_url')}"
-                )
-
-            message += (
-                f"📌 {pair.get('symbol', 'Unknown')} - {pair.get('name', 'Unknown')}\n"
-                f"💵 السعر: {pair.get('price', 'N/A')}\n"
-                f"💰 السيولة: {pair.get('liquidity', 0)}\n"
-                f"📊 حجم 24h: {pair.get('volume_24h', 0)}\n"
-                f"📈 تغير 24h: {pair.get('change_24h', 'N/A')}%\n"
-                f"🧪 التصنيف: {classification}\n"
-                f"🎯 Signal Score: {signal_score}/100\n"
-                f"🏦 DEX: {pair.get('dex', 'unknown')}\n"
-                f"🔗 {pair.get('pair_url', '')}\n\n"
-            )
-
-        message += f"💾 تم حفظ {saved_count} سجل في قاعدة البيانات."
-
-    send_telegram(message)
-
-    for alert in signal_messages:
-        send_telegram(alert)
-
-    return {"sent": True, "count": count, "signals": len(signal_messages)}
-
-
-@app.route("/stats")
-def stats():
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute("SELECT COUNT(*) AS total FROM market_snapshots")
-    total = cur.fetchone()["total"]
-
-    cur.execute("SELECT COUNT(DISTINCT token_address) AS unique_tokens FROM market_snapshots")
-    unique_tokens = cur.fetchone()["unique_tokens"]
-
-    cur.execute("""
-        SELECT symbol, name, COUNT(*) AS appearances
-        FROM market_snapshots
-        GROUP BY symbol, name
-        ORDER BY appearances DESC
-        LIMIT 10
-    """)
-    top_tokens = cur.fetchall()
-
-    cur.close()
-    conn.close()
-
-    html = f"""
-    <h1>🧠 Solana Brain Stats</h1>
-    <p><b>💾 Total Records:</b> {total}</p>
-    <p><b>🪙 Unique Tokens:</b> {unique_tokens}</p>
-    <h2>🔥 Most Tracked Tokens</h2>
-    """
-
-    for token in top_tokens:
-        html += f"<p>{token['symbol']} - {token['name']} ({token['appearances']} مرات)</p>"
-
-    html += '<p><a href="/">Back Home</a></p>'
-    return html
-
-
-@app.route("/top")
-def top():
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT
-            token_address, symbol, name,
-            COUNT(*) AS appearances,
-            ROUND(AVG(volume_24h)::numeric, 2) AS avg_volume,
-            ROUND(AVG(liquidity)::numeric, 2) AS avg_liquidity,
-            ROUND(AVG(change_24h)::numeric, 2) AS avg_change,
-            MAX(pair_url) AS pair_url
-        FROM market_snapshots
-        GROUP BY token_address, symbol, name
-        ORDER BY COUNT(*) DESC, AVG(volume_24h) DESC
-        LIMIT 20
-    """)
-
-    tokens = cur.fetchall()
-    cur.close()
-    conn.close()
-
-    html = "<h1>🏆 Top Solana Tokens</h1>"
-
-    for token in tokens:
-        score = moonshot_score(
-            token["appearances"],
-            token["avg_volume"],
-            token["avg_liquidity"],
-            token["avg_change"]
-        )
-
-        avg_liquidity = safe_float(token["avg_liquidity"])
-
-        if avg_liquidity == 0:
-            label = "🟡 مبكر جداً / بدون سيولة"
-        elif score >= 75:
-            label = "🟢 قوي"
-        elif score >= 50:
-            label = "🟡 متوسط"
-        else:
-            label = "🔴 ضعيف / مراقبة فقط"
-
-        html += f"""
-        <hr>
-        <h2>{token['symbol']} - {token['name']}</h2>
-        <p><b>Score:</b> {score}/100 {label}</p>
-        <p><b>Appearances:</b> {token['appearances']}</p>
-        <p><b>Avg Volume:</b> {token['avg_volume']}</p>
-        <p><b>Avg Liquidity:</b> {token['avg_liquidity']}</p>
-        <p><b>Avg Change:</b> {token['avg_change']}%</p>
-        <p><a href="{token['pair_url']}" target="_blank">Open DexScreener</a></p>
-        """
-
-    html += '<p><a href="/">Back Home</a></p>'
-    return html
-
-
-@app.route("/winners")
-def winners():
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute("""
-        WITH first_rows AS (
-            SELECT DISTINCT ON (token_address)
-                token_address, symbol, name,
-                price AS first_price,
-                created_at AS first_seen
-            FROM market_snapshots
-            WHERE price IS NOT NULL AND price > 0
-            ORDER BY token_address, created_at ASC
-        ),
-        latest_rows AS (
-            SELECT DISTINCT ON (token_address)
-                token_address,
-                price AS latest_price,
-                created_at AS last_seen,
-                pair_url
-            FROM market_snapshots
-            WHERE price IS NOT NULL AND price > 0
-            ORDER BY token_address, created_at DESC
-        )
-        SELECT
-            f.symbol, f.name, f.first_price, l.latest_price,
-            ROUND(((l.latest_price - f.first_price) / f.first_price * 100)::numeric, 2) AS roi,
-            f.first_seen, l.last_seen, l.pair_url
-        FROM first_rows f
-        JOIN latest_rows l ON f.token_address = l.token_address
-        WHERE f.first_price > 0
-        ORDER BY roi DESC
-        LIMIT 20
-    """)
-
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-
-    html = "<h1>🚀 Winners</h1>"
-    html += "<p>العملات التي ارتفعت بعد أول رصد لها.</p>"
-
-    for r in rows:
-        roi = safe_float(r["roi"])
-
-        if roi > 100:
-            label = "🟢 انفجار قوي"
-        elif roi > 30:
-            label = "🟡 صعود جيد"
-        elif roi > 0:
-            label = "⚪ صعود بسيط"
-        else:
-            label = "🔴 لم تنجح"
-
-        html += f"""
-        <hr>
-        <h2>{r['symbol']} - {r['name']}</h2>
-        <p><b>ROI:</b> {r['roi']}% {label}</p>
-        <p><b>First Price:</b> {r['first_price']}</p>
-        <p><b>Latest Price:</b> {r['latest_price']}</p>
-        <p><a href="{r['pair_url']}" target="_blank">Open DexScreener</a></p>
-        """
-
-    html += '<p><a href="/">Back Home</a></p>'
-    return html
-
-
-@app.route("/signals")
-def signals():
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT symbol, name, price, liquidity, volume_24h, change_24h, pair_url, created_at
-        FROM market_snapshots
-        WHERE volume_24h >= 30000
-          AND change_24h > 20
-        ORDER BY created_at DESC
-        LIMIT 30
-    """)
-
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-
-    html = "<h1>🚨 Signals</h1>"
-    html += "<p>آخر الفرص حسب الحجم والزخم.</p>"
-
-    for r in rows:
-        pair = {
-            "liquidity": r["liquidity"],
-            "volume_24h": r["volume_24h"],
-            "change_24h": r["change_24h"]
-        }
-        score = calculate_signal_score(pair)
-        liquidity = safe_float(r["liquidity"])
-
-        if liquidity == 0:
-            label = "🟡 مبكر جداً / بدون سيولة"
-        elif score >= 75:
-            label = "🟢 قوي"
-        elif score >= 50:
-            label = "🟡 متوسط"
-        else:
-            label = "🔴 مراقبة فقط"
-
-        html += f"""
-        <hr>
-        <h2>{r['symbol']} - {r['name']}</h2>
-        <p><b>Signal Score:</b> {score}/100 {label}</p>
-        <p><b>Price:</b> {r['price']}</p>
-        <p><b>Liquidity:</b> {r['liquidity']}</p>
-        <p><b>Volume 24h:</b> {r['volume_24h']}</p>
-        <p><b>Change 24h:</b> {r['change_24h']}%</p>
-        <p><b>Seen At:</b> {r['created_at']}</p>
-        <p><a href="{r['pair_url']}" target="_blank">Open DexScreener</a></p>
-        """
-
-    html += '<p><a href="/">Back Home</a></p>'
-    return html
-
-
-@app.route("/early")
-def early():
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT symbol, name, price, liquidity, volume_24h, change_24h, pair_url, created_at
-        FROM market_snapshots
-        WHERE liquidity = 0
-          AND volume_24h >= 30000
-          AND change_24h > 10
-        ORDER BY volume_24h DESC, change_24h DESC
-        LIMIT 30
-    """)
-
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-
-    html = "<h1>🟡 Early Gems</h1>"
-    html += "<p>عملات مبكرة جداً من Pump.fun بدون سيولة حقيقية، للمراقبة فقط.</p>"
-
-    for r in rows:
-        html += f"""
-        <hr>
-        <h2>{r['symbol']} - {r['name']}</h2>
-        <p><b>Price:</b> {r['price']}</p>
-        <p><b>Liquidity:</b> {r['liquidity']}</p>
-        <p><b>Volume 24h:</b> {r['volume_24h']}</p>
-        <p><b>Change 24h:</b> {r['change_24h']}%</p>
-        <p><b>Seen At:</b> {r['created_at']}</p>
-        <p><a href="{r['pair_url']}" target="_blank">Open DexScreener</a></p>
-        """
-
-    html += '<p><a href="/">Back Home</a></p>'
-    return html
-
-
-@app.route("/moonshots")
-def moonshots():
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT
-            token_address, symbol, name,
-            COUNT(*) AS appearances,
-            ROUND(AVG(volume_24h)::numeric, 2) AS avg_volume,
-            ROUND(AVG(liquidity)::numeric, 2) AS avg_liquidity,
-            ROUND(AVG(change_24h)::numeric, 2) AS avg_change,
-            MAX(pair_url) AS pair_url
-        FROM market_snapshots
-        GROUP BY token_address, symbol, name
-        HAVING COUNT(*) >= 2
-        ORDER BY AVG(volume_24h) DESC
-        LIMIT 30
-    """)
-
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-
-    html = "<h1>🚀 Moonshots</h1>"
-    html += "<p>أفضل المرشحين حسب النشاط والتكرار والسيولة.</p>"
-
-    for r in rows:
-        score = moonshot_score(
-            r["appearances"],
-            r["avg_volume"],
-            r["avg_liquidity"],
-            r["avg_change"]
-        )
-
-        liquidity = safe_float(r["avg_liquidity"])
-
-        if liquidity == 0:
-            label = "🟡 مبكر جداً / بدون سيولة"
-        elif score >= 75:
-            label = "🟢 قوي"
-        elif score >= 50:
-            label = "🟡 متوسط"
-        else:
-            label = "🔴 مراقبة فقط"
-
-        html += f"""
-        <hr>
-        <h2>{r['symbol']} - {r['name']}</h2>
-        <p><b>Moonshot Score:</b> {score}/100 {label}</p>
-        <p><b>Appearances:</b> {r['appearances']}</p>
-        <p><b>Avg Volume:</b> {r['avg_volume']}</p>
-        <p><b>Avg Liquidity:</b> {r['avg_liquidity']}</p>
-        <p><b>Avg Change:</b> {r['avg_change']}%</p>
-        <p><a href="{r['pair_url']}" target="_blank">Open DexScreener</a></p>
-        """
-
-    html += '<p><a href="/">Back Home</a></p>'
-    return html
-
-
-@app.route("/alerts")
-def alerts():
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT
-            token_address, symbol, name,
-            COUNT(*) AS appearances,
-            ROUND(AVG(volume_24h)::numeric, 2) AS avg_volume,
-            ROUND(AVG(liquidity)::numeric, 2) AS avg_liquidity,
-            ROUND(AVG(change_24h)::numeric, 2) AS avg_change,
-            MAX(pair_url) AS pair_url
-        FROM market_snapshots
-        GROUP BY token_address, symbol, name
-        HAVING AVG(liquidity) >= 10000
-           AND AVG(volume_24h) >= 50000
-        ORDER BY AVG(volume_24h) DESC
-        LIMIT 20
-    """)
-
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-
-    html = "<h1>🚨 Alerts</h1>"
-    html += "<p>فرص أقوى بسيولة حقيقية وحجم تداول جيد.</p>"
-
-    for r in rows:
-        score = moonshot_score(
-            r["appearances"],
-            r["avg_volume"],
-            r["avg_liquidity"],
-            r["avg_change"]
-        )
-
-        if score < 60:
-            continue
-
-        label = "🟢 قوي" if score >= 75 else "🟡 متوسط"
-
-        html += f"""
-        <hr>
-        <h2>{r['symbol']} - {r['name']}</h2>
-        <p><b>Alert Score:</b> {score}/100 {label}</p>
-        <p><b>Appearances:</b> {r['appearances']}</p>
-        <p><b>Avg Volume:</b> {r['avg_volume']}</p>
-        <p><b>Avg Liquidity:</b> {r['avg_liquidity']}</p>
-        <p><b>Avg Change:</b> {r['avg_change']}%</p>
-        <p><a href="{r['pair_url']}" target="_blank">Open DexScreener</a></p>
-        """
-
-    html += '<p><a href="/">Back Home</a></p>'
-    return html
-
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+        message += "لا توجد بيانات
