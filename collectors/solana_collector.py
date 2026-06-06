@@ -1,14 +1,25 @@
 import requests
 
 def get_solana_pairs():
-    url = "https://api.dexscreener.com/latest/dex/search?q=SOL"
-    response = requests.get(url, timeout=10)
-    data = response.json()
+    url = "https://api.dexscreener.com/latest/dex/search?q=solana"
 
-    pairs = data.get("pairs", [])
-    solana_pairs = [p for p in pairs if p.get("chainId") == "solana"]
+    try:
+        response = requests.get(url, timeout=15)
+        print("Status Code:", response.status_code)
 
-    return solana_pairs[:5]
+        if response.status_code != 200:
+            print("DexScreener error:", response.text[:200])
+            return []
+
+        data = response.json()
+        pairs = data.get("pairs", [])
+        solana_pairs = [p for p in pairs if p.get("chainId") == "solana"]
+
+        return solana_pairs[:5]
+
+    except Exception as e:
+        print("Collector error:", e)
+        return []
 
 
 def start():
