@@ -3,17 +3,9 @@ import time
 
 SEARCH_TERMS = [
     "pump",
-    "pumpfun",
     "meme",
-    "moon",
-    "solana",
-    "dog",
-    "cat",
     "pepe",
-    "bonk",
-    "wif",
-    "ai",
-    "trump"
+    "bonk"
 ]
 
 BLOCKED_SYMBOLS = {
