@@ -637,16 +637,19 @@ def alerts():
 
     cur.execute("""
         SELECT
-            token_address, symbol, name,
+            token_address,
+            MAX(symbol) AS symbol,
+            MAX(name) AS name,
             COUNT(*) AS appearances,
             ROUND(AVG(volume_24h)::numeric, 2) AS avg_volume,
             ROUND(AVG(liquidity)::numeric, 2) AS avg_liquidity,
             ROUND(AVG(change_24h)::numeric, 2) AS avg_change,
             MAX(pair_url) AS pair_url
         FROM market_snapshots
-        GROUP BY token_address, symbol, name
+        GROUP BY token_address
         HAVING AVG(liquidity) >= 10000
            AND AVG(volume_24h) >= 50000
+           AND COUNT(*) >= 2
         ORDER BY AVG(volume_24h) DESC
         LIMIT 20
     """)
@@ -656,7 +659,7 @@ def alerts():
     conn.close()
 
     html = "<h1>Alerts</h1>"
-    html += "<p>Stronger opportunities with real liquidity and good trading volume.</p>"
+    html += "<p>Unique strong opportunities with real liquidity and good trading volume.</p>"
 
     for r in rows:
         score = moonshot_score(
@@ -684,7 +687,6 @@ def alerts():
 
     html += '<p><a href="/">Back Home</a></p>'
     return html
-
 
 @app.route("/brain")
 def brain():
