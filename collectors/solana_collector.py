@@ -1,19 +1,33 @@
 import requests
+import time
 
-DEX_URLS = [
-    "https://api.dexscreener.com/latest/dex/search?q=pumpfun",
-    "https://api.dexscreener.com/latest/dex/search?q=pump",
-    "https://api.dexscreener.com/latest/dex/search?q=moon",
-    "https://api.dexscreener.com/latest/dex/search?q=meme",
+SEARCH_TERMS = [
+    "pump",
+    "pumpfun",
+    "meme",
+    "moon",
+    "solana",
+    "dog",
+    "cat",
+    "pepe",
+    "bonk",
+    "wif",
+    "ai",
+    "trump"
 ]
 
 BLOCKED_SYMBOLS = {
-    "SOL", "WSOL", "USDC", "USDT", "USD1", "SOL-USDT",
-    "USDC-SOL", "SOL-USD1", "BTC", "ETH"
+    "SOL", "WSOL", "USDC", "USDT", "USD1",
+    "BTC", "ETH", "JUP", "RAY"
 }
 
 BLOCKED_NAMES = {
-    "solana", "usd coin", "tether", "wrapped solana"
+    "solana",
+    "usd coin",
+    "tether",
+    "wrapped solana",
+    "bitcoin",
+    "ethereum"
 }
 
 
@@ -22,16 +36,19 @@ def safe_float(value, default=0):
         if value is None:
             return default
         return float(value)
-    except:
+    except Exception:
         return default
 
 
 def is_bad_pair(pair):
-    symbol = str(pair.get("symbol", "")).upper()
-    name = str(pair.get("name", "")).lower()
+    symbol = str(pair.get("symbol", "")).upper().strip()
+    name = str(pair.get("name", "")).lower().strip()
     price = safe_float(pair.get("price"))
     liquidity = safe_float(pair.get("liquidity"))
     volume_24h = safe_float(pair.get("volume_24h"))
+
+    if not symbol:
+        return True
 
     if symbol in BLOCKED_SYMBOLS:
         return True
@@ -39,74 +56,88 @@ def is_bad_pair(pair):
     if name in BLOCKED_NAMES:
         return True
 
-    if "-" in symbol:
+    if "-" in symbol or "/" in symbol:
         return True
 
-    # استبعاد العملات المستقرة أو الأزواج القريبة من 1$
     if 0.95 <= price <= 1.05:
         return True
 
-    # استبعاد سيولة ضخمة غالباً ليست ميم كوين
-    if liquidity > 50_000_000:
+    if liquidity > 100_000_000:
         return True
 
-    # استبعاد بدون نشاط
     if volume_24h <= 0:
         return True
 
     return False
 
 
+def parse_pair(p):
+    base = p.get("baseToken") or {}
+    token_address = base.get("address")
+
+    if not token_address:
+        return None
+
+    return {
+        "address": token_address,
+        "symbol": base.get("symbol", "Unknown"),
+        "name": base.get("name", "Unknown"),
+        "price": p.get("priceUsd"),
+        "liquidity": safe_float((p.get("liquidity") or {}).get("usd")),
+        "volume_24h": safe_float((p.get("volume") or {}).get("h24")),
+        "change_24h": safe_float((p.get("priceChange") or {}).get("h24")),
+        "dex": p.get("dexId", "unknown"),
+        "pair_url": p.get("url", "")
+    }
+
+
+def fetch_search(term):
+    url = f"https://api.dexscreener.com/latest/dex/search?q={term}"
+
+    response = requests.get(
+        url,
+        timeout=20,
+        headers={
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "application/json"
+        }
+    )
+
+    print("DEX SEARCH:", term, response.status_code, flush=True)
+
+    if response.status_code != 200:
+        return []
+
+    data = response.json()
+    return data.get("pairs") or []
+
+
 def get_solana_pairs():
     all_pairs = []
 
-    for url in DEX_URLS:
+    for term in SEARCH_TERMS:
         try:
-            response = requests.get(
-                url,
-                timeout=15,
-                headers={"User-Agent": "Mozilla/5.0"}
-            )
-
-            print("DEX STATUS:", response.status_code, url)
-
-            if response.status_code != 200:
-                continue
-
-            data = response.json()
-            pairs = data.get("pairs") or []
+            pairs = fetch_search(term)
 
             for p in pairs:
                 if p.get("chainId") != "solana":
                     continue
 
-                base = p.get("baseToken") or {}
-                token_address = base.get("address")
+                item = parse_pair(p)
 
-                if not token_address:
+                if not item:
                     continue
-
-                item = {
-                    "address": token_address,
-                    "symbol": base.get("symbol", "Unknown"),
-                    "name": base.get("name", "Unknown"),
-                    "price": p.get("priceUsd"),
-                    "liquidity": safe_float((p.get("liquidity") or {}).get("usd")),
-                    "volume_24h": safe_float((p.get("volume") or {}).get("h24")),
-                    "change_24h": (p.get("priceChange") or {}).get("h24"),
-                    "dex": p.get("dexId", "unknown"),
-                    "pair_url": p.get("url", "")
-                }
 
                 if is_bad_pair(item):
                     continue
 
                 all_pairs.append(item)
 
-        except Exception as e:
-            print("Collector URL error:", url, e)
+            time.sleep(0.2)
 
-    # إزالة التكرار حسب عنوان التوكن
+        except Exception as e:
+            print("Collector error:", term, e, flush=True)
+
     best_by_token = {}
 
     for pair in all_pairs:
@@ -114,17 +145,22 @@ def get_solana_pairs():
 
         if address not in best_by_token:
             best_by_token[address] = pair
-        elif pair["liquidity"] > best_by_token[address]["liquidity"]:
-            best_by_token[address] = pair
+        else:
+            old = best_by_token[address]
+            if pair["volume_24h"] > old["volume_24h"]:
+                best_by_token[address] = pair
 
     final_pairs = list(best_by_token.values())
 
-    # نرتب حسب النشاط وليس السيولة فقط
     final_pairs.sort(
-        key=lambda x: (x["volume_24h"], x["liquidity"]),
+        key=lambda x: (
+            x["volume_24h"],
+            x["liquidity"],
+            abs(safe_float(x["change_24h"]))
+        ),
         reverse=True
     )
 
-    print("SOLANA MEME PAIRS FOUND:", len(final_pairs))
+    print("SOLANA PAIRS FOUND:", len(final_pairs), flush=True)
 
-    return final_pairs[:10]
+    return final_pairs[:20]
