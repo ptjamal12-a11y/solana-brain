@@ -169,6 +169,7 @@ def home():
     <p><a href="/early">Early Gems</a></p>
     <p><a href="/moonshots">Moonshots</a></p>
     <p><a href="/alerts">Alerts</a></p>
+    <p><a href="/best-today">Best Today</a></p>
     <p><a href="/init-ai">Init AI</a></p>
     <p><a href="/brain">Brain</a></p>
     <p><a href="/learn">Learn</a></p>
