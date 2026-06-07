@@ -1033,7 +1033,73 @@ def collect_recommendations():
         "skipped": skipped,
         "source": "dexscreener_auto_filtered"
     }
+@app.route("/best-today")
+def best_today():
+    conn = get_connection()
+    cur = conn.cursor()
 
+    html = "<h1>Best Today</h1>"
+
+    # أعلى حجم تداول
+    cur.execute("""
+        SELECT symbol, name, volume_24h, pair_url
+        FROM market_snapshots
+        ORDER BY volume_24h DESC
+        LIMIT 1
+    """)
+    top_volume = cur.fetchone()
+
+    if top_volume:
+        html += f"""
+        <h2>Highest Volume</h2>
+        <p>{top_volume['symbol']} - {top_volume['name']}</p>
+        <p>Volume: {top_volume['volume_24h']}</p>
+        <p><a href="{top_volume['pair_url']}">Open DexScreener</a></p>
+        <hr>
+        """
+
+    # أعلى سيولة
+    cur.execute("""
+        SELECT symbol, name, liquidity, pair_url
+        FROM market_snapshots
+        ORDER BY liquidity DESC
+        LIMIT 1
+    """)
+    top_liquidity = cur.fetchone()
+
+    if top_liquidity:
+        html += f"""
+        <h2>Highest Liquidity</h2>
+        <p>{top_liquidity['symbol']} - {top_liquidity['name']}</p>
+        <p>Liquidity: {top_liquidity['liquidity']}</p>
+        <p><a href="{top_liquidity['pair_url']}">Open DexScreener</a></p>
+        <hr>
+        """
+
+    # أعلى نمو
+    cur.execute("""
+        SELECT symbol, name, change_24h, pair_url
+        FROM market_snapshots
+        ORDER BY change_24h DESC
+        LIMIT 1
+    """)
+    top_growth = cur.fetchone()
+
+    if top_growth:
+        html += f"""
+        <h2>Highest Growth</h2>
+        <p>{top_growth['symbol']} - {top_growth['name']}</p>
+        <p>Growth: {top_growth['change_24h']}%</p>
+        <p><a href="{top_growth['pair_url']}">Open DexScreener</a></p>
+        <hr>
+        """
+
+    cur.close()
+    conn.close()
+
+    html += '<p><a href="/">Back Home</a></p>'
+
+    return html
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
