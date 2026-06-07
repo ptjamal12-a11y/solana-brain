@@ -11,6 +11,17 @@ BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 
+@app.after_request
+def add_utf8_header(response):
+    response.headers["Content-Type"] = response.headers.get(
+        "Content-Type",
+        "text/html; charset=utf-8"
+    )
+    if response.headers["Content-Type"].startswith("text/html"):
+        response.headers["Content-Type"] = "text/html; charset=utf-8"
+    return response
+
+
 def send_telegram(message):
     if not BOT_TOKEN or not CHAT_ID:
         return
@@ -34,7 +45,7 @@ def safe_float(value, default=0):
         if value is None:
             return default
         return float(value)
-    except:
+    except Exception:
         return default
 
 
@@ -44,16 +55,21 @@ def classify_pair(pair):
     change = safe_float(pair.get("change_24h"))
 
     if liquidity == 0:
-        return "ð¡ ÙØ¨ÙØ± Ø¬Ø¯Ø§Ù / Pump.fun Ø¨Ø¯ÙÙ Ø³ÙÙÙØ©"
+        return "Early / No Liquidity"
+
     if liquidity < 5000:
-        return "ð´ Ø³ÙÙÙØ© Ø¶Ø¹ÙÙØ© Ø¬Ø¯Ø§Ù"
+        return "Very Low Liquidity"
+
     if change < -50:
-        return "ð´ Ø§ÙÙÙØ§Ø± ÙÙÙ"
+        return "Strong Drop"
+
     if change > 300:
-        return "ð´ Ø§Ø±ØªÙØ¹ ÙØ«ÙØ±Ø§Ù - Ø§Ø­ØªÙØ§Ù Ø¯Ø®ÙÙ ÙØªØ£Ø®Ø±"
+        return "Too Late / High Pump Risk"
+
     if volume > 50000 and liquidity > 10000 and 10 <= change <= 200:
-        return "ð¢ ÙØ§Ø¨Ù ÙÙÙØªØ§Ø¨Ø¹Ø©"
-    return "âª ÙØ±Ø§ÙØ¨Ø© ÙÙØ·"
+        return "Watchable"
+
+    return "Watch Only"
 
 
 def calculate_signal_score(pair):
@@ -87,7 +103,7 @@ def calculate_signal_score(pair):
         score -= 30
 
     if liquidity == 0:
-        score = min(score, 40)
+        score = min(score, 20)
 
     return max(0, min(100, score))
 
@@ -135,7 +151,7 @@ def moonshot_score(appearances, volume, liquidity, change):
         score -= 20
 
     if liquidity == 0:
-        score = min(score, 40)
+        score = min(score, 20)
 
     return max(0, min(100, score))
 
@@ -214,6 +230,7 @@ def init_ai():
             created_at TIMESTAMP DEFAULT NOW()
         )
     """)
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS binance_snapshots (
             id SERIAL PRIMARY KEY,
@@ -227,11 +244,12 @@ def init_ai():
             created_at TIMESTAMP DEFAULT NOW()
         )
     """)
+
     conn.commit()
     cur.close()
     conn.close()
 
-    return "AI + recommendations initialized"
+    return "AI, recommendations, and market tables initialized"
 
 
 @app.route("/scan")
@@ -239,14 +257,14 @@ def scan():
     pairs = get_solana_pairs()
     count = len(pairs)
 
-    message = "ð§  ØªÙØ±ÙØ± ÙØ­Øµ Ø³ÙÙ Ø³ÙÙØ§ÙØ§\n"
-    message += f"ð Scan time: {int(time.time())}\n"
-    message += f"ð Ø¹Ø¯Ø¯ Ø§ÙÙØªØ§Ø¦Ø¬: {count}\n\n"
+    message = "Solana Market Scan Report\n"
+    message += f"Scan time: {int(time.time())}\n"
+    message += f"Results count: {count}\n\n"
 
     signal_messages = []
 
     if count == 0:
-        message += "ÙØ§ ØªÙØ¬Ø¯ Ø¨ÙØ§ÙØ§Øª Ø­Ø§ÙÙØ§Ù."
+        message += "No data available now."
     else:
         saved_count = 0
 
@@ -262,28 +280,28 @@ def scan():
 
             if signal_score >= 75:
                 signal_messages.append(
-                    f"ð¨ Ø¥Ø´Ø§Ø±Ø© ÙÙÙØ©\n"
-                    f"ð {pair.get('symbol')} - {pair.get('name')}\n"
+                    f"Strong Signal\n"
+                    f"Token: {pair.get('symbol')} - {pair.get('name')}\n"
                     f"Score: {signal_score}/100\n"
-                    f"ð° Ø§ÙØ³ÙÙÙØ©: {pair.get('liquidity')}\n"
-                    f"ð Ø§ÙØ­Ø¬Ù 24h: {pair.get('volume_24h')}\n"
-                    f"ð Ø§ÙØªØºÙØ± 24h: {pair.get('change_24h')}%\n"
-                    f"ð {pair.get('pair_url')}"
+                    f"Liquidity: {pair.get('liquidity')}\n"
+                    f"Volume 24h: {pair.get('volume_24h')}\n"
+                    f"Change 24h: {pair.get('change_24h')}%\n"
+                    f"URL: {pair.get('pair_url')}"
                 )
 
             message += (
-                f"ð {pair.get('symbol', 'Unknown')} - {pair.get('name', 'Unknown')}\n"
-                f"ðµ Ø§ÙØ³Ø¹Ø±: {pair.get('price', 'N/A')}\n"
-                f"ð° Ø§ÙØ³ÙÙÙØ©: {pair.get('liquidity', 0)}\n"
-                f"ð Ø­Ø¬Ù 24h: {pair.get('volume_24h', 0)}\n"
-                f"ð ØªØºÙØ± 24h: {pair.get('change_24h', 'N/A')}%\n"
-                f"ð§ª Ø§ÙØªØµÙÙÙ: {classification}\n"
-                f"ð¯ Signal Score: {signal_score}/100\n"
-                f"ð¦ DEX: {pair.get('dex', 'unknown')}\n"
-                f"ð {pair.get('pair_url', '')}\n\n"
+                f"Token: {pair.get('symbol', 'Unknown')} - {pair.get('name', 'Unknown')}\n"
+                f"Price: {pair.get('price', 'N/A')}\n"
+                f"Liquidity: {pair.get('liquidity', 0)}\n"
+                f"Volume 24h: {pair.get('volume_24h', 0)}\n"
+                f"Change 24h: {pair.get('change_24h', 'N/A')}%\n"
+                f"Classification: {classification}\n"
+                f"Signal Score: {signal_score}/100\n"
+                f"DEX: {pair.get('dex', 'unknown')}\n"
+                f"URL: {pair.get('pair_url', '')}\n\n"
             )
 
-        message += f"ð¾ ØªÙ Ø­ÙØ¸ {saved_count} Ø³Ø¬Ù ÙÙ ÙØ§Ø¹Ø¯Ø© Ø§ÙØ¨ÙØ§ÙØ§Øª."
+        message += f"Saved {saved_count} records to database."
 
     send_telegram(message)
 
@@ -317,14 +335,14 @@ def stats():
     conn.close()
 
     html = f"""
-    <h1>ð§  Solana Brain Stats</h1>
-    <p><b>ð¾ Total Records:</b> {total}</p>
-    <p><b>ðª Unique Tokens:</b> {unique_tokens}</p>
-    <h2>ð¥ Most Tracked Tokens</h2>
+    <h1>Solana Brain Stats</h1>
+    <p><b>Total Records:</b> {total}</p>
+    <p><b>Unique Tokens:</b> {unique_tokens}</p>
+    <h2>Most Tracked Tokens</h2>
     """
 
     for token in top_tokens:
-        html += f"<p>{token['symbol']} - {token['name']} ({token['appearances']} ÙØ±Ø§Øª)</p>"
+        html += f"<p>{token['symbol']} - {token['name']} ({token['appearances']} times)</p>"
 
     html += '<p><a href="/">Back Home</a></p>'
     return html
@@ -353,7 +371,7 @@ def top():
     cur.close()
     conn.close()
 
-    html = "<h1>ð Top Solana Tokens</h1>"
+    html = "<h1>Top Solana Tokens</h1>"
 
     for token in tokens:
         score = moonshot_score(
@@ -366,13 +384,13 @@ def top():
         avg_liquidity = safe_float(token["avg_liquidity"])
 
         if avg_liquidity == 0:
-            label = "ð¡ ÙØ¨ÙØ± Ø¬Ø¯Ø§Ù / Ø¨Ø¯ÙÙ Ø³ÙÙÙØ©"
+            label = "Early / No Liquidity"
         elif score >= 75:
-            label = "ð¢ ÙÙÙ"
+            label = "Strong"
         elif score >= 50:
-            label = "ð¡ ÙØªÙØ³Ø·"
+            label = "Medium"
         else:
-            label = "ð´ Ø¶Ø¹ÙÙ / ÙØ±Ø§ÙØ¨Ø© ÙÙØ·"
+            label = "Weak / Watch Only"
 
         html += f"""
         <hr>
@@ -429,20 +447,20 @@ def winners():
     cur.close()
     conn.close()
 
-    html = "<h1>ð Winners</h1>"
-    html += "<p>Ø§ÙØ¹ÙÙØ§Øª Ø§ÙØªÙ Ø§Ø±ØªÙØ¹Øª Ø¨Ø¹Ø¯ Ø£ÙÙ Ø±ØµØ¯ ÙÙØ§.</p>"
+    html = "<h1>Winners</h1>"
+    html += "<p>Tokens that increased after first detection.</p>"
 
     for r in rows:
         roi = safe_float(r["roi"])
 
         if roi > 100:
-            label = "ð¢ Ø§ÙÙØ¬Ø§Ø± ÙÙÙ"
+            label = "Strong Explosion"
         elif roi > 30:
-            label = "ð¡ ØµØ¹ÙØ¯ Ø¬ÙØ¯"
+            label = "Good Rise"
         elif roi > 0:
-            label = "âª ØµØ¹ÙØ¯ Ø¨Ø³ÙØ·"
+            label = "Small Rise"
         else:
-            label = "ð´ ÙÙ ØªÙØ¬Ø­"
+            label = "Not Successful"
 
         html += f"""
         <hr>
@@ -475,8 +493,8 @@ def signals():
     cur.close()
     conn.close()
 
-    html = "<h1>ð¨ Signals</h1>"
-    html += "<p>Ø¢Ø®Ø± Ø§ÙÙØ±Øµ Ø­Ø³Ø¨ Ø§ÙØ­Ø¬Ù ÙØ§ÙØ²Ø®Ù.</p>"
+    html = "<h1>Signals</h1>"
+    html += "<p>Latest opportunities based on volume and momentum.</p>"
 
     for r in rows:
         pair = {
@@ -488,13 +506,13 @@ def signals():
         liquidity = safe_float(r["liquidity"])
 
         if liquidity == 0:
-            label = "ð¡ ÙØ¨ÙØ± Ø¬Ø¯Ø§Ù / Ø¨Ø¯ÙÙ Ø³ÙÙÙØ©"
+            label = "Early / No Liquidity"
         elif score >= 75:
-            label = "ð¢ ÙÙÙ"
+            label = "Strong"
         elif score >= 50:
-            label = "ð¡ ÙØªÙØ³Ø·"
+            label = "Medium"
         else:
-            label = "ð´ ÙØ±Ø§ÙØ¨Ø© ÙÙØ·"
+            label = "Watch Only"
 
         html += f"""
         <hr>
@@ -531,8 +549,8 @@ def early():
     cur.close()
     conn.close()
 
-    html = "<h1>ð¡ Early Gems</h1>"
-    html += "<p>Ø¹ÙÙØ§Øª ÙØ¨ÙØ±Ø© Ø¬Ø¯Ø§Ù ÙÙ Pump.fun Ø¨Ø¯ÙÙ Ø³ÙÙÙØ© Ø­ÙÙÙÙØ©Ø ÙÙÙØ±Ø§ÙØ¨Ø© ÙÙØ·.</p>"
+    html = "<h1>Early Gems</h1>"
+    html += "<p>Very early Pump.fun tokens with no real liquidity. Watch only.</p>"
 
     for r in rows:
         html += f"""
@@ -565,7 +583,8 @@ def moonshots():
             MAX(pair_url) AS pair_url
         FROM market_snapshots
         GROUP BY token_address, symbol, name
-        HAVING COUNT(*) >= 2
+        HAVING COUNT(*) >= 3
+           AND AVG(volume_24h) >= 50000
         ORDER BY AVG(volume_24h) DESC
         LIMIT 30
     """)
@@ -574,8 +593,8 @@ def moonshots():
     cur.close()
     conn.close()
 
-    html = "<h1>ð Moonshots</h1>"
-    html += "<p>Ø£ÙØ¶Ù Ø§ÙÙØ±Ø´Ø­ÙÙ Ø­Ø³Ø¨ Ø§ÙÙØ´Ø§Ø· ÙØ§ÙØªÙØ±Ø§Ø± ÙØ§ÙØ³ÙÙÙØ©.</p>"
+    html = "<h1>Moonshots</h1>"
+    html += "<p>Best candidates based on activity, recurrence, volume, and liquidity.</p>"
 
     for r in rows:
         score = moonshot_score(
@@ -588,13 +607,13 @@ def moonshots():
         liquidity = safe_float(r["avg_liquidity"])
 
         if liquidity == 0:
-            label = "ð¡ ÙØ¨ÙØ± Ø¬Ø¯Ø§Ù / Ø¨Ø¯ÙÙ Ø³ÙÙÙØ©"
+            label = "Early / No Liquidity"
         elif score >= 75:
-            label = "ð¢ ÙÙÙ"
+            label = "Strong"
         elif score >= 50:
-            label = "ð¡ ÙØªÙØ³Ø·"
+            label = "Medium"
         else:
-            label = "ð´ ÙØ±Ø§ÙØ¨Ø© ÙÙØ·"
+            label = "Watch Only"
 
         html += f"""
         <hr>
@@ -636,8 +655,8 @@ def alerts():
     cur.close()
     conn.close()
 
-    html = "<h1>ð¨ Alerts</h1>"
-    html += "<p>ÙØ±Øµ Ø£ÙÙÙ Ø¨Ø³ÙÙÙØ© Ø­ÙÙÙÙØ© ÙØ­Ø¬Ù ØªØ¯Ø§ÙÙ Ø¬ÙØ¯.</p>"
+    html = "<h1>Alerts</h1>"
+    html += "<p>Stronger opportunities with real liquidity and good trading volume.</p>"
 
     for r in rows:
         score = moonshot_score(
@@ -650,7 +669,7 @@ def alerts():
         if score < 60:
             continue
 
-        label = "ð¢ ÙÙÙ" if score >= 75 else "ð¡ ÙØªÙØ³Ø·"
+        label = "Strong" if score >= 75 else "Medium"
 
         html += f"""
         <hr>
@@ -682,7 +701,7 @@ def brain():
         return "Run /init-ai first"
 
     return f"""
-    <h1>ð§  Solana Brain Weights</h1>
+    <h1>Solana Brain Weights</h1>
     <p><b>Liquidity Weight:</b> {row['liquidity_weight']}</p>
     <p><b>Volume Weight:</b> {row['volume_weight']}</p>
     <p><b>Change Weight:</b> {row['change_weight']}</p>
@@ -780,7 +799,7 @@ def learn():
     conn.close()
 
     return f"""
-    <h1>â Learning Complete</h1>
+    <h1>Learning Complete</h1>
     <p>Liquidity Weight: {liquidity_weight}</p>
     <p>Volume Weight: {volume_weight}</p>
     <p>Change Weight: {change_weight}</p>
@@ -855,8 +874,8 @@ def recommendations():
     cur.close()
     conn.close()
 
-    html = "<h1>ð£ï¸ Recommendations</h1>"
-    html += "<p>Ø§ÙØªÙØµÙØ§Øª Ø§ÙÙØ¯Ø®ÙØ© ÙØ¯ÙÙØ§Ù ÙÙ ÙØµØ§Ø¯Ø± ÙØ®ØªÙÙØ©.</p>"
+    html = "<h1>Recommendations</h1>"
+    html += "<p>Manual and automatic recommendations from different sources.</p>"
 
     for r in rows:
         html += f"""
@@ -910,8 +929,8 @@ def source_ranking():
     cur.close()
     conn.close()
 
-    html = "<h1>ð Source Ranking</h1>"
-    html += "<p>ØªØ±ØªÙØ¨ ÙØµØ§Ø¯Ø± Ø§ÙØªÙØµÙØ§Øª Ø­Ø³Ø¨ ÙØªØ§Ø¦Ø¬ÙØ§ Ø§ÙÙØ¹ÙÙØ©.</p>"
+    html = "<h1>Source Ranking</h1>"
+    html += "<p>Ranking recommendation sources based on actual results.</p>"
 
     for r in rows:
         html += f"""
@@ -1012,149 +1031,7 @@ def collect_recommendations():
         "source": "dexscreener_auto_filtered"
     }
 
-COINGECKO_BINANCE_COINS = {
-    "BTCUSDT": "bitcoin",
-    "ETHUSDT": "ethereum",
-    "SOLUSDT": "solana",
-    "BNBUSDT": "binancecoin",
-    "XRPUSDT": "ripple",
-    "DOGEUSDT": "dogecoin",
-    "SHIBUSDT": "shiba-inu",
-    "PEPEUSDT": "pepe",
-    "BONKUSDT": "bonk",
-    "WIFUSDT": "dogwifcoin",
-    "FLOKIUSDT": "floki"
-}
 
-
-@app.route("/init-binance")
-def init_binance():
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS binance_snapshots (
-            id SERIAL PRIMARY KEY,
-            symbol TEXT,
-            price NUMERIC,
-            price_change_percent NUMERIC,
-            volume NUMERIC,
-            quote_volume NUMERIC,
-            high_price NUMERIC,
-            low_price NUMERIC,
-            created_at TIMESTAMP DEFAULT NOW()
-        )
-    """)
-
-    conn.commit()
-    cur.close()
-    conn.close()
-
-    return "Binance table initialized"
-
-
-@app.route("/binance-scan")
-def binance_scan():
-    conn = get_connection()
-    cur = conn.cursor()
-
-    saved = 0
-    results = []
-    errors = []
-
-    ids = ",".join(COINGECKO_BINANCE_COINS.values())
-
-    try:
-        url = "https://api.coingecko.com/api/v3/coins/markets"
-        params = {
-            "vs_currency": "usd",
-            "ids": ids,
-            "order": "market_cap_desc",
-            "per_page": 250,
-            "page": 1,
-            "sparkline": "false",
-            "price_change_percentage": "24h"
-        }
-
-        r = requests.get(url, params=params, timeout=20)
-
-        if r.status_code != 200:
-            cur.close()
-            conn.close()
-            return {
-                "saved": 0,
-                "error": "CoinGecko request failed",
-                "status": r.status_code,
-                "response": r.text[:500]
-            }
-
-        data = r.json()
-        by_id = {item.get("id"): item for item in data}
-
-        for symbol, coin_id in COINGECKO_BINANCE_COINS.items():
-            item = by_id.get(coin_id)
-
-            if not item:
-                errors.append({
-                    "symbol": symbol,
-                    "error": "coin not found"
-                })
-                continue
-
-            price = safe_float(item.get("current_price"))
-            change = safe_float(item.get("price_change_percentage_24h"))
-            volume = safe_float(item.get("total_volume"))
-            quote_volume = safe_float(item.get("total_volume"))
-            high_price = safe_float(item.get("high_24h"))
-            low_price = safe_float(item.get("low_24h"))
-
-            cur.execute("""
-                INSERT INTO binance_snapshots (
-                    symbol,
-                    price,
-                    price_change_percent,
-                    volume,
-                    quote_volume,
-                    high_price,
-                    low_price
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-            """, (
-                symbol,
-                price,
-                change,
-                volume,
-                quote_volume,
-                high_price,
-                low_price
-            ))
-
-            saved += 1
-
-            results.append({
-                "symbol": symbol,
-                "price": price,
-                "change_24h": change,
-                "quote_volume": quote_volume,
-                "high_24h": high_price,
-                "low_24h": low_price,
-                "source": "coingecko"
-            })
-
-        conn.commit()
-
-    except Exception as e:
-        errors.append({"error": str(e)})
-
-    cur.close()
-    conn.close()
-
-    return {
-        "saved": saved,
-        "results": results,
-        "errors": errors,
-        "source": "coingecko"
-    }
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
